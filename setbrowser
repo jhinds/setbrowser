@@ -1,0 +1,102 @@
+#!/bin/sh
+# Uses only tools and frameworks included with macOS.
+exec /usr/bin/osascript -l JavaScript - "$@" <<'JAVASCRIPT'
+ObjC.import('AppKit');
+ObjC.import('CoreServices');
+ObjC.import('stdlib');
+
+function fromCF(ref) {
+  var value = ObjC.castRefToObject(ref);
+  return value.isNil() ? null : ObjC.deepUnwrap(value);
+}
+
+function current(scheme) {
+  return fromCF($.LSCopyDefaultHandlerForURLScheme($(scheme)));
+}
+
+function fail(message) {
+  console.log(message);
+  $.exit(1);
+}
+
+function browsers() {
+  var ids = fromCF($.LSCopyAllHandlersForURLScheme($('https'))) || [];
+  var apps = [];
+  ids.forEach(function(id) {
+    var url = $.NSWorkspace.sharedWorkspace.URLForApplicationWithBundleIdentifier($(id));
+    if (url.isNil()) return;
+    var info = ObjC.deepUnwrap($.NSBundle.bundleWithURL(url).infoDictionary);
+    if (!info) return;
+    var schemes = [];
+    (info.CFBundleURLTypes || []).forEach(function(type) {
+      schemes = schemes.concat(type.CFBundleURLSchemes || []);
+    });
+    var handlesHTML = (info.CFBundleDocumentTypes || []).some(function(type) {
+      return (type.LSItemContentTypes || []).some(function(value) {
+        return value === 'public.html' || value === 'public.xhtml';
+      }) || (type.CFBundleTypeExtensions || []).some(function(value) {
+        return /^(html?|xhtml)$/i.test(value);
+      });
+    });
+    if (schemes.indexOf('http') < 0 || !handlesHTML) return;
+    apps.push({
+      id: id,
+      name: info.CFBundleDisplayName || info.CFBundleName || id,
+      short: id.split('.').pop().toLowerCase()
+    });
+  });
+  return apps.sort(function(a, b) { return a.name.localeCompare(b.name); });
+}
+
+function run(args) {
+  if (args.indexOf('--help') >= 0 || args.indexOf('-h') >= 0) {
+    return 'Usage: setbrowser [browser | --list | --current]\n' +
+      'No argument lists installed browsers. Accepts a name or bundle ID.\n' +
+      'Examples: setbrowser chrome; setbrowser finicky\n' +
+      'Use --dry-run with a browser to preview without changing anything.\n' +
+      'This changes the default browser, not its profile.';
+  }
+  var apps = browsers();
+  if (!apps.length) fail('Could not read installed browsers from macOS. Try running this in Terminal.');
+  var https = current('https');
+  var http = current('http');
+  if (args.length === 1 && args[0] === '--current') {
+    return ['https', 'http'].map(function(scheme) {
+      var id = scheme === 'https' ? https : http;
+      var app = apps.filter(function(item) { return item.id === id; })[0];
+      return scheme + ': ' + (app ? app.name : id || 'unknown');
+    }).join('\n');
+  }
+  if (!args.length || (args.length === 1 && args[0] === '--list')) {
+    return apps.map(function(app) {
+      return (app.id === https ? '* ' : '  ') + app.short + '  (' + app.name + ')';
+    }).join('\n') + '\n\n* Current HTTPS default. Use: setbrowser <name>';
+  }
+  var preview = args.indexOf('--dry-run') >= 0;
+  var words = args.filter(function(arg) { return arg !== '--dry-run'; });
+  if (words.some(function(arg) { return arg.charAt(0) === '-'; })) fail('Unknown option. Use setbrowser --help.');
+  var query = words.join(' ').trim().toLowerCase();
+  if (!query) fail('Specify a browser. Use setbrowser --list.');
+  var matches = apps.filter(function(app) {
+    return [app.id.toLowerCase(), app.name.toLowerCase(), app.short].indexOf(query) >= 0;
+  });
+  if (!matches.length) matches = apps.filter(function(app) {
+    return app.name.toLowerCase().indexOf(query) >= 0;
+  });
+  if (matches.length !== 1) fail(matches.length ?
+    'More than one match. Use a full name or bundle ID:\n' + matches.map(function(app) {
+      return '  ' + app.name + ' (' + app.id + ')';
+    }).join('\n') : 'Unknown browser: ' + query + '. Use setbrowser --list.');
+  var target = matches[0];
+  if (preview) return 'Would set HTTP and HTTPS to ' + target.name + ' (' + target.id + ').';
+  if (https === target.id && http === target.id) return target.name + ' is already the default browser.';
+  ['https', 'http'].forEach(function(scheme) {
+    if (current(scheme) === target.id) return;
+    var result = $.LSSetDefaultHandlerForURLScheme($(scheme), $(target.id));
+    if (result !== 0) fail('Could not set ' + scheme + ' (macOS error ' + result + '). Check setbrowser --current.');
+  });
+  return current('https') === target.id && current('http') === target.id ?
+    'Default browser: ' + target.name :
+    'Requested ' + target.name + '. Approve any macOS prompt, then check: setbrowser --current';
+}
+JAVASCRIPT
