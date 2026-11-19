@@ -49,8 +49,6 @@ Ambiguous or unknown names fail without changing anything. If two browsers share
 - Chooses the browser app, not a browser profile.
 - Runs through `/usr/bin/osascript` and Apple's AppKit and CoreServices frameworks. It currently uses Apple's older Launch Services functions.
 
-If Claude sign-in opens Safari while Finicky is the default, try `setbrowser chrome`, complete sign-in, then run `setbrowser finicky` to restore it.
-
 ## Verify
 
 Run `setbrowser --list`, `setbrowser --current`, and `setbrowser --dry-run chrome` to check browser discovery and name matching without switching browsers.
